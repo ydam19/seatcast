@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>앉을각 · 2호선 자리 예보</title>
+  <meta name="description" content="2호선에서 어느 칸, 어느 문 앞에 서야 빨리 앉을 수 있는지 알려드립니다.">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="line-badge" aria-hidden="true">2</span>
+        <div>
+          <h1>앉을각</h1>
+          <p class="tagline">어디 서야 앉을 수 있을까</p>
+        </div>
+      </div>
+    </header>
+
+    <form class="panel inputs" id="form" autocomplete="off">
+      <div class="route-row">
+        <label class="field">
+          <span>탄 역</span>
+          <select id="from"></select>
+        </label>
+        <button type="button" class="swap" id="swap" aria-label="탄 역과 내릴 역 바꾸기">⇄</button>
+        <label class="field">
+          <span>내릴 역</span>
+          <select id="to"></select>
+        </label>
+      </div>
+      <div class="when-row">
+        <div class="field">
+          <span>요일</span>
+          <div class="seg" id="daytype" role="radiogroup" aria-label="요일"></div>
+        </div>
+        <label class="field">
+          <span>시간</span>
+          <select id="hour"></select>
+        </label>
+      </div>
+      <label class="field">
+        <span>지금 선 위치 <em>선택</em></span>
+        <select id="mine"></select>
+      </label>
+    </form>
+
+    <section id="result" aria-live="polite"></section>
+
+    <footer class="foot">
+      <p>
+        데이터: 서울교통공사 지하철 혼잡도 정보(2026.9.30 기준), 서울특별시 역별 시간대별 승하차 인원(2025.11~2026.10),
+        서울교통공사 빠른하차정보. 칸·문별 분배는 계단·에스컬레이터 위치를 바탕으로 한 추정입니다.
+      </p>
+    </footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
