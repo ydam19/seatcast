@@ -12,41 +12,42 @@
   <main class="app">
     <header class="top">
       <div class="brand">
-        <span class="line-badge" aria-hidden="true">2</span>
         <div>
           <h1>앉을각</h1>
-          <p class="tagline">어디 서야 앉을 수 있을까</p>
+          <p class="tagline">1~8호선 칸·문별 자리 예보</p>
         </div>
       </div>
     </header>
 
     <form class="panel inputs" id="form" autocomplete="off">
-      <div class="route-row">
-        <label class="field">
-          <span>탄 역</span>
-          <select id="from"></select>
-        </label>
-        <button type="button" class="swap" id="swap" aria-label="탄 역과 내릴 역 바꾸기">⇄</button>
-        <label class="field">
-          <span>내릴 역</span>
-          <select id="to"></select>
-        </label>
+      <div class="place">
+        <span class="place-label">타는 곳</span>
+        <div class="place-row">
+          <select id="fromLine" class="line-select" aria-label="타는 호선"></select>
+          <select id="from" aria-label="타는 역"></select>
+        </div>
+      </div>
+      <button type="button" class="swap" id="swap" aria-label="타는 곳과 내리는 곳 바꾸기">⇅</button>
+      <div class="place">
+        <span class="place-label">내리는 곳</span>
+        <div class="place-row">
+          <select id="toLine" class="line-select" aria-label="내리는 호선"></select>
+          <select id="to" aria-label="내리는 역"></select>
+        </div>
       </div>
       <div class="when-row">
         <div class="field">
           <span>요일</span>
-          <div class="seg" id="daytype" role="radiogroup" aria-label="요일"></div>
+          <div class="segctl" id="daytype" role="radiogroup" aria-label="요일"></div>
         </div>
         <label class="field">
           <span>시간</span>
           <select id="hour"></select>
         </label>
       </div>
-      <label class="field">
-        <span>지금 선 위치 <em>선택</em></span>
-        <select id="mine"></select>
-      </label>
     </form>
+
+    <section id="game" class="game" aria-label="자리 잡기 시뮬레이션"></section>
 
     <section id="result" aria-live="polite"></section>
 
@@ -54,6 +55,8 @@
       <p>
         데이터: 서울교통공사 지하철 혼잡도 정보(2026.9.30 기준), 서울특별시 역별 시간대별 승하차 인원(2025.11~2026.10),
         서울교통공사 빠른하차정보. 칸·문별 분배는 계단·에스컬레이터 위치를 바탕으로 한 추정입니다.
+        자리 예보는 서울교통공사 운영 구간(1~8호선)만 제공하며, 9호선은 경로 안내만 합니다.
+        소요 시간은 정거장 수로 계산한 대략값입니다.
       </p>
     </footer>
   </main>

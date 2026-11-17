@@ -1,22 +1,25 @@
 import {
-  DAYTYPES, route, heading, seatsAhead, doorLabel, doorIndex, congestionPct,
+  LINE_COLORS, buildGraph, plan, doorLabel, congestionPct,
 } from "./seatcast.js";
+import { createGame } from "./game.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  from: $("from"), to: $("to"), hour: $("hour"), mine: $("mine"),
-  daytype: $("daytype"), swap: $("swap"), result: $("result"),
+  fromLine: $("fromLine"), from: $("from"), toLine: $("toLine"), to: $("to"),
+  hour: $("hour"), daytype: $("daytype"), swap: $("swap"), result: $("result"), game: $("game"),
 };
 
-const state = { daytype: "평일", hour: 8, from: 226, to: 221, mine: "" };
+const state = {
+  fromLine: "9", from: "석촌", toLine: "5", to: "공덕",
+  daytype: "평일", hour: 8,
+  mine: {}, // 구간 번호 -> 지금 선 위치 ("4-3")
+};
+
+let model, graph, game;
 
 function todayDaytype() {
   const d = new Date().getDay();
   return d === 0 ? "일요일" : d === 6 ? "토요일" : "평일";
-}
-
-function clampHour(h) {
-  return Math.min(23, Math.max(5, h));
 }
 
 function option(value, label) {
@@ -26,23 +29,31 @@ function option(value, label) {
   return o;
 }
 
-function fillInputs(model) {
-  const loop = model.meta.loop;
-  for (const no of loop) {
-    els.from.append(option(no, model.stations[String(no)]));
-    els.to.append(option(no, model.stations[String(no)]));
-  }
-  for (let h = 5; h <= 23; h++) {
-    els.hour.append(option(h, `${String(h).padStart(2, "0")}:00 ~ ${String(h).padStart(2, "0")}:59`));
-  }
-  els.mine.append(option("", "모름 / 아직 안 탐"));
-  const { cars, doors } = model.meta;
-  for (let i = 0; i < cars * doors; i++) els.mine.append(option(doorLabel(i, doors), doorLabel(i, doors)));
+function lineLabel(line) {
+  return `${line}호선`;
+}
 
-  for (const dt of DAYTYPES) {
+function fillStations(select, line, selected) {
+  select.replaceChildren();
+  const names = [...model.stations[line]].sort((a, b) => a.localeCompare(b, "ko"));
+  for (const n of names) select.append(option(n, n));
+  select.value = names.includes(selected) ? selected : names[0];
+  return select.value;
+}
+
+function fillInputs() {
+  const lines = Object.keys(model.stations).sort();
+  for (const sel of [els.fromLine, els.toLine]) {
+    for (const l of lines) sel.append(option(l, lineLabel(l)));
+  }
+  for (const h of model.meta.hours) {
+    const hh = String(h).padStart(2, "0");
+    els.hour.append(option(h, `${hh}:00 ~ ${hh}:59`));
+  }
+  for (const dt of model.meta.daytypes) {
     const b = document.createElement("button");
     b.type = "button";
-    b.role = "radio";
+    b.setAttribute("role", "radio");
     b.textContent = dt === "평일" ? "평일" : dt.replace("요일", "");
     b.dataset.value = dt;
     els.daytype.append(b);
@@ -50,139 +61,200 @@ function fillInputs(model) {
 }
 
 function syncInputs() {
-  els.from.value = state.from;
-  els.to.value = state.to;
+  els.fromLine.value = state.fromLine;
+  els.toLine.value = state.toLine;
+  state.from = fillStations(els.from, state.fromLine, state.from);
+  state.to = fillStations(els.to, state.toLine, state.to);
   els.hour.value = state.hour;
-  els.mine.value = state.mine;
   for (const b of els.daytype.children) {
     b.setAttribute("aria-checked", String(b.dataset.value === state.daytype));
   }
+  for (const [sel, line] of [[els.fromLine, state.fromLine], [els.toLine, state.toLine]]) {
+    sel.style.setProperty("--lc", LINE_COLORS[line]);
+  }
 }
 
-// 0~4 단계 색: 이 결과 안에서의 상대값
 function heatLevel(v, max) {
   if (max <= 0) return 0;
   const r = v / max;
-  return r > 0.85 ? 4 : r > 0.65 ? 3 : r > 0.45 ? 2 : r > 0.25 ? 1 : 0;
+  return r >= 0.75 ? 4 : r >= 0.55 ? 3 : r >= 0.35 ? 2 : r >= 0.15 ? 1 : 0;
 }
 
 const fmt = (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(1));
+const badge = (line) => `<span class="lb" style="--lc:${LINE_COLORS[line]}">${line}</span>`;
 
-function render(model) {
-  const { cars, doors } = model.meta;
-  const name = (no) => model.stations[String(no)];
+function routeSummary(p) {
+  const parts = p.segments.map((s, i) => {
+    const kind = s.express ? " 급행" : "";
+    const stops = s.nodes.length - 1;
+    const transfer = i > 0 ? `<li class="transfer">${s.nodes[0]} 환승</li>` : "";
+    return `${transfer}<li>${badge(s.line)}<span>${s.nodes[0]} → ${s.nodes.at(-1)}</span>
+      <em>${lineLabel(s.line)}${kind} · ${stops}정거장</em></li>`;
+  });
+  const transfers = p.segments.length - 1;
+  return `<div class="panel summary">
+    <p class="route-line">약 ${Math.round(p.minutes)}분 · ${transfers ? `환승 ${transfers}번` : "환승 없음"}</p>
+    <ol class="route">${parts.join("")}</ol>
+  </div>`;
+}
 
-  if (state.from === state.to) {
-    els.result.innerHTML = `<div class="panel empty">탄 역과 내릴 역을 다르게 골라 주세요.</div>`;
-    return;
+function segmentPanel(seg, idx) {
+  const f = seg.forecast;
+  const info = model.meta.lines[seg.line];
+  const title = `${badge(seg.line)}<h2>${seg.nodes[0]} → ${seg.nodes.at(-1)}</h2>`;
+
+  if (!info.forecast) {
+    return `<div class="panel seg">
+      <div class="seg-head">${title}</div>
+      <p class="notice">${lineLabel(seg.line)}은 혼잡도와 칸·문 위치 데이터가 공개되지 않아 자리 예보를 제공하지 않아요.</p>
+    </div>`;
+  }
+  if (seg.nodes.length < 3) {
+    return `<div class="panel seg">
+      <div class="seg-head">${title}</div>
+      <p class="notice">한 정거장이라 중간에 자리가 날 기회가 없어요.</p>
+    </div>`;
+  }
+  if (!f.total) {
+    return `<div class="panel seg">
+      <div class="seg-head">${title}</div>
+      <p class="notice">이 구간은 서울교통공사 운영 구간이 아니라 혼잡도 데이터가 없어 자리 예보를 제공하지 않아요.</p>
+    </div>`;
   }
 
-  const r = seatsAhead(model, state);
-  const routeLine = `${name(state.from)} → ${name(state.to)} · ${heading(model, state.from, r.dir)} (${r.dir}) · ${r.stops}정거장`;
-
-  if (r.stops < 2) {
-    els.result.innerHTML = `<div class="panel summary"><p class="route-line">${routeLine}</p>
-      <p class="headline">한 정거장이면 서서 가셔도 금방이에요.</p>
-      <p class="sub">중간에 거치는 역이 없어서 자리가 날 기회가 없습니다.</p></div>`;
-    return;
-  }
-
-  const total = r.total;
+  const total = f.total;
   const max = Math.max(...total);
   const best = total.indexOf(max);
-  const mineIdx = doorIndex(state.mine, doors);
-  const boardPct = congestionPct(r.boardLoad);
-  const seatsFull = model.meta.seats_per_train / 16; // 34%
+  const mineLabel = state.mine[idx];
+  const mineIdx = mineLabel ? total.findIndex((_, i) => doorLabel(i, f.doors) === mineLabel) : -1;
+  const pct = congestionPct(f.boardLoad, info.capacity);
+  const seatsFullPct = Math.round((info.seats / info.capacity) * 100);
 
-  let notice = "";
-  if (boardPct != null && boardPct < seatsFull) {
-    notice = `<p class="notice">이 시간대 열차는 혼잡도 ${boardPct}%로, 탈 때부터 빈자리가 있을 가능성이 높아요.</p>`;
-  } else if (boardPct != null) {
-    notice = `<p class="notice">탈 때 열차 혼잡도 ${boardPct}% · 좌석은 이미 다 차 있어요.</p>`;
+  let notes = "";
+  if (f.uncovered) {
+    notes += `<p class="notice">중간 ${f.uncovered}개 역은 데이터가 없는 구간이라 계산에서 빠졌어요.</p>`;
+  }
+  if (pct != null) {
+    notes += pct < seatsFullPct
+      ? `<p class="notice">탈 때 열차 혼잡도 ${pct}% · 빈자리가 있을 가능성이 높아요.</p>`
+      : `<p class="notice">탈 때 열차 혼잡도 ${pct}% · 좌석은 이미 다 차 있어요.</p>`;
+  }
+  if (f.boardHasSeats) {
+    return `<div class="panel seg">
+      <div class="seg-head">${title}</div>
+      <p class="headline">타자마자 앉을 수 있어요</p>
+      <p class="sub">이 시간대 열차는 탈 때 혼잡도가 ${pct}%로, 좌석이 다 차는 ${seatsFullPct}%보다 낮아요. 아무 칸이나 괜찮아요.</p>
+      ${f.uncovered ? `<p class="notice">중간 ${f.uncovered}개 역은 데이터가 없는 구간이에요.</p>` : ""}
+    </div>`;
   }
 
-  let compare = `<div class="stat best"><div class="k">추천 위치 ${doorLabel(best, doors)}</div>
-    <div class="v">${fmt(max)}<small>석</small></div></div>`;
-  if (mineIdx != null) {
+  const P = (v) => `${Math.round(v * 100)}`;
+  let compare = `<div class="stat best"><div class="k">추천 ${doorLabel(best, f.doors)}</div>
+    <div class="v">${P(max)}<small>%</small></div></div>`;
+  if (mineIdx >= 0) {
     const mv = total[mineIdx];
-    const ratio = mv > 0 ? max / mv : null;
-    compare += `<div class="stat mine"><div class="k">지금 위치 ${state.mine}</div>
-      <div class="v">${fmt(mv)}<small>석</small></div></div>`;
-    if (ratio && mineIdx !== best) {
-      notice += `<p class="notice">${doorLabel(best, doors)}로 옮기면 내 앞에 날 자리가 ${ratio.toFixed(1)}배예요.</p>`;
+    compare += `<div class="stat mine"><div class="k">지금 위치 ${mineLabel}</div>
+      <div class="v">${P(mv)}<small>%</small></div></div>`;
+    if (mineIdx !== best) {
+      notes += `<p class="notice">${doorLabel(best, f.doors)}로 옮기면 앉을 확률이 ${P(mv)}%에서 ${P(max)}%로 올라가요.</p>`;
     }
   } else {
     const avg = total.reduce((a, b) => a + b, 0) / total.length;
-    compare += `<div class="stat"><div class="k">40개 문 평균</div>
-      <div class="v">${fmt(avg)}<small>석</small></div></div>`;
+    compare += `<div class="stat"><div class="k">아무 데나 섰을 때</div>
+      <div class="v">${P(avg)}<small>%</small></div></div>`;
   }
 
-  const summary = `<div class="panel summary">
-    <p class="route-line">${routeLine}</p>
-    <p class="headline"><strong>${doorLabel(best, doors)}</strong> 문 앞에 서세요</p>
-    <p class="sub">내리기 전까지 이 문 앞 좌석에서 평균 ${fmt(max)}자리가 빌 것으로 예상돼요.</p>
-    <div class="compare">${compare}</div>
-    ${notice}
-  </div>`;
-
-  const carRows = [];
-  for (let c = 0; c < cars; c++) {
+  const rows = [];
+  for (let c = 0; c < f.cars; c++) {
     const cells = [];
-    let carSum = 0;
-    for (let d = 0; d < doors; d++) {
-      const i = c * doors + d;
-      carSum += total[i];
+    let carBest = 0;
+    for (let d = 0; d < f.doors; d++) {
+      const i = c * f.doors + d;
+      carBest = Math.max(carBest, total[i]);
       const cls = ["door", i === best ? "best" : "", i === mineIdx ? "mine" : ""].join(" ").trim();
-      cells.push(`<button type="button" class="${cls}" data-h="${heatLevel(total[i], max)}" data-door="${doorLabel(i, doors)}"
-        aria-label="${doorLabel(i, doors)} 예상 빈자리 ${fmt(total[i])}석">${fmt(total[i])}</button>`);
+      cells.push(`<button type="button" class="${cls}" data-h="${heatLevel(total[i], 1)}"
+        data-seg="${idx}" data-door="${doorLabel(i, f.doors)}"
+        aria-label="${doorLabel(i, f.doors)} 앉을 확률 ${P(total[i])}%">${P(total[i])}</button>`);
     }
-    carRows.push(`<div class="car"><span class="car-no">${c + 1}칸</span>
+    rows.push(`<div class="car"><span class="car-no">${c + 1}칸</span>
       <div class="car-doors">${cells.join("")}</div>
-      <span class="car-total">${fmt(carSum)}<small>석</small></span></div>`);
+      <span class="car-total">${P(carBest)}<small>%</small></span></div>`);
   }
 
-  const heatmap = `<div class="panel">
-    <div class="section-title"><h2>칸·문별 예상 빈자리</h2><span>문을 누르면 지금 위치로 지정</span></div>
-    <p class="front">1칸이 진행 방향 맨 앞입니다 (${heading(model, state.from, r.dir)})</p>
-    <div class="train">${carRows.join("")}</div>
-    <div class="legend">적음 <i style="background:var(--heat-0)"></i><i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i><i style="background:var(--heat-3)"></i><i style="background:var(--heat-4)"></i> 많음</div>
-  </div>`;
-
-  const focus = mineIdx ?? best;
-  const stepRows = r.steps.map((s) => {
-    const v = s.perDoor ? s.perDoor[focus] : null;
-    const pct = s.load ? `<span class="cong">도착 혼잡도 ${congestionPct(s.load)}%</span>` : "";
-    return `<li><span>${s.name}${pct}</span><span class="n">${v == null ? "-" : fmt(v) + "석"}</span></li>`;
+  const focus = mineIdx >= 0 ? mineIdx : best;
+  const steps = f.steps.map((s) => {
+    const cp = s.load ? `<span class="cong">도착 혼잡도 ${congestionPct(s.load, info.capacity)}%</span>` : "";
+    const right = s.perDoor
+      ? `빈자리 ${fmt(s.perDoor[focus])} · 누적 ${P(s.cumulative[focus])}%`
+      : "데이터 없음";
+    return `<li><span>${s.name}${cp}</span><span class="n">${right}</span></li>`;
   });
-  const steps = `<div class="panel">
-    <div class="section-title"><h2>${doorLabel(focus, doors)} 앞에서 정거장별로</h2><span>내릴 역 전까지</span></div>
-    <ul class="steps">${stepRows.join("")}</ul>
-  </div>`;
 
-  els.result.innerHTML = summary + heatmap + steps;
+  return `<div class="panel seg">
+    <div class="seg-head">${title}</div>
+    <p class="headline"><strong>${doorLabel(best, f.doors)}</strong> 문 앞에 서세요</p>
+    <p class="sub">내리기 전까지 앉을 확률 약 ${P(max)}%예요.</p>
+    <div class="compare">${compare}</div>
+    ${notes}
+    <div class="section-title"><h3>칸·문별 앉을 확률</h3><span>문을 누르면 지금 위치로 지정</span></div>
+    <p class="front">1칸이 진행 방향 맨 앞 (${seg.nodes[1]} 방면) · 오른쪽은 칸에서 가장 좋은 문</p>
+    <div class="train">${rows.join("")}</div>
+    <div class="legend">낮음 <i style="background:var(--heat-0)"></i><i style="background:var(--heat-1)"></i><i style="background:var(--heat-2)"></i><i style="background:var(--heat-3)"></i><i style="background:var(--heat-4)"></i> 높음</div>
+    <div class="section-title"><h3>${doorLabel(focus, f.doors)} 앞에서 정거장별로</h3><span>그 역에서 빌 자리 · 누적 확률</span></div>
+    <ul class="steps">${steps.join("")}</ul>
+  </div>`;
+}
+
+function render() {
+  if (state.fromLine === state.toLine && state.from === state.to) {
+    els.result.innerHTML = `<div class="panel empty">탄 곳과 내릴 곳을 다르게 골라 주세요.</div>`;
+    els.game.hidden = true;
+    return;
+  }
+  const p = plan(model, graph, state);
+  if (!p) {
+    els.result.innerHTML = `<div class="panel empty">경로를 찾지 못했어요.</div>`;
+    els.game.hidden = true;
+    return;
+  }
+  els.game.hidden = false;
+  game.show(p, state);
+  els.result.innerHTML = routeSummary(p) + p.segments.map(segmentPanel).join("");
 }
 
 async function main() {
-  const model = await (await fetch("data/model.json")).json();
+  model = await (await fetch("data/model.json")).json();
+  graph = buildGraph(model);
+  game = createGame(els.game, {
+    model,
+    onPick: (seg, door) => { state.mine[seg] = door; render(); },
+  });
   state.daytype = todayDaytype();
-  state.hour = clampHour(new Date().getHours());
-  fillInputs(model);
+  const h = new Date().getHours();
+  state.hour = Math.min(Math.max(h, model.meta.hours[0]), model.meta.hours.at(-1));
+  fillInputs();
   syncInputs();
-  render(model);
+  render();
 
-  const update = () => { syncInputs(); render(model); };
-  els.from.addEventListener("change", () => { state.from = Number(els.from.value); update(); });
-  els.to.addEventListener("change", () => { state.to = Number(els.to.value); update(); });
+  const update = () => { syncInputs(); render(); };
+  const reset = () => { state.mine = {}; update(); };
+  els.fromLine.addEventListener("change", () => { state.fromLine = els.fromLine.value; reset(); });
+  els.toLine.addEventListener("change", () => { state.toLine = els.toLine.value; reset(); });
+  els.from.addEventListener("change", () => { state.from = els.from.value; reset(); });
+  els.to.addEventListener("change", () => { state.to = els.to.value; reset(); });
   els.hour.addEventListener("change", () => { state.hour = Number(els.hour.value); update(); });
-  els.mine.addEventListener("change", () => { state.mine = els.mine.value; update(); });
-  els.swap.addEventListener("click", () => { [state.from, state.to] = [state.to, state.from]; update(); });
+  els.swap.addEventListener("click", () => {
+    [state.fromLine, state.toLine] = [state.toLine, state.fromLine];
+    [state.from, state.to] = [state.to, state.from];
+    reset();
+  });
   els.daytype.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     if (b) { state.daytype = b.dataset.value; update(); }
   });
   els.result.addEventListener("click", (e) => {
     const b = e.target.closest(".door");
-    if (b) { state.mine = b.dataset.door; update(); }
+    if (b) { state.mine[b.dataset.seg] = b.dataset.door; render(); }
   });
 }
 
