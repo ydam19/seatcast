@@ -243,10 +243,12 @@ export function plan(model, r, state, timetables) {
   return { minutes, timed: !!(first && last), segments: segs, sig: r.sig };
 }
 
-// 어느 문이든 앉을 확률이 거의 같으면(5%p 안) '서서 가는 정거장 수'로 문을 비교합니다
+// 어느 문이든 앉을 확률이 거의 같거나(5%p 안) 가장 좋은 문이 거의 확실하면(95% 이상)
+// '서서 가는 정거장 수'로 문을 비교합니다
 export function metricMode(f) {
   const t = f.total;
-  return Math.max(...t) - Math.min(...t) < 0.05 ? "wait" : "pct";
+  const hi = Math.max(...t);
+  return hi - Math.min(...t) < 0.05 || hi >= 0.95 ? "wait" : "pct";
 }
 
 // 문을 비교할 값(0~1, 클수록 좋음)
