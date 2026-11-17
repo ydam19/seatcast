@@ -41,10 +41,11 @@
           <div class="segctl" id="daytype" role="radiogroup" aria-label="요일"></div>
         </div>
         <label class="field">
-          <span>시간</span>
-          <select id="hour"></select>
+          <span>탈 열차</span>
+          <select id="train" aria-label="탈 열차 (출발 시각과 행선지)"></select>
         </label>
       </div>
+      <div class="live" id="live" hidden aria-live="polite"></div>
     </form>
 
     <section id="game" class="game" aria-label="자리 잡기 시뮬레이션"></section>
@@ -54,9 +55,9 @@
     <footer class="foot">
       <p>
         데이터: 서울교통공사 지하철 혼잡도 정보(2026.9.30 기준), 서울특별시 역별 시간대별 승하차 인원(2025.11~2026.10),
-        서울교통공사 빠른하차정보. 칸·문별 분배는 계단·에스컬레이터 위치를 바탕으로 한 추정입니다.
+        서울교통공사 빠른하차정보, 서울특별시 역별 열차 시간표. 칸·문별 분배는 계단·에스컬레이터 위치를 바탕으로 한 추정입니다.
         자리 예보는 서울교통공사 운영 구간(1~8호선)만 제공하며, 9호선은 경로 안내만 합니다.
-        소요 시간은 정거장 수로 계산한 대략값입니다.
+        출발·도착 시각과 환승 열차는 시간표 기준이며 실제 운행은 늦어질 수 있습니다.
       </p>
     </footer>
   </main>

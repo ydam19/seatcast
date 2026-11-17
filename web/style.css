@@ -136,10 +136,44 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--green); ou
 .segctl button[aria-checked="true"] { background: var(--surface); color: var(--ink); font-weight: 700; box-shadow: 0 1px 2px rgb(0 0 0 / 0.08); }
 
 /* 결과 */
+.route-pick { display: grid; gap: 6px; margin: 0 0 12px; }
+.route-pick button {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg);
+  color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.route-pick button[aria-checked="true"] { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+.rp-lines { display: flex; gap: 3px; }
+.rp-text { display: grid; gap: 2px; min-width: 0; }
+.rp-main { font-weight: 600; font-variant-numeric: tabular-nums; }
+.rp-sub { font-size: 12px; color: var(--ink-2); }
+.rp-tag { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.rp-tag.rec { color: var(--green-ink); font-weight: 700; }
+.rp-why { margin: -4px 0 12px; font-size: 12px; color: var(--ink-2); }
 .summary .route-line { margin: 0 0 4px; color: var(--ink-2); font-size: 13px; }
 .summary .headline { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.35; }
 .summary .headline strong { color: var(--green-ink); }
 .summary .sub { margin: 8px 0 0; color: var(--ink-2); font-size: 14px; }
+/* 실시간 도착 */
+.live { display: grid; gap: 6px; }
+.live-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.live-head::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #e5484d; animation: live-dot 1.6s ease-in-out infinite; }
+.live-head span { margin-left: auto; font-weight: 500; color: var(--ink-3); }
+.live-list { display: grid; gap: 6px; }
+.live-item {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
+  width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.live-item b { font-variant-numeric: tabular-nums; font-weight: 700; }
+.live-item em { font-style: normal; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-item small { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+.live-item small.late { color: var(--warn); }
+.live-item[aria-pressed="true"] { border-color: var(--mine); box-shadow: inset 0 0 0 1px var(--mine); }
+.live-empty { font-size: 12px; color: var(--ink-3); margin: 0; }
+@keyframes live-dot { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .live-head::before { animation: none; } }
+
 .notice { margin: 10px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--bg); font-size: 13px; color: var(--ink-2); }
 .notice.warn { color: var(--warn); }
 
@@ -226,7 +260,7 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--green); ou
   background: linear-gradient(#262b33, #1c2027);
   border-bottom: 3px solid var(--lc);
 }
-.g-sign-st { font-weight: 800; font-size: 17px; letter-spacing: -0.01em; }
+.g-sign-st { font-weight: 800; font-size: 17px; letter-spacing: -0.01em; white-space: nowrap; }
 .g-sign-dir { font-size: 12px; color: #9aa3ad; }
 .g-led {
   margin-left: auto; max-width: 52%;
@@ -332,25 +366,29 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--green); ou
   background: radial-gradient(circle, #d6a613 3px, transparent 3.6px) 0 0 / 10px 10px, #f1c232;
   box-shadow: 0 2px 0 rgb(0 0 0 / 0.12);
 }
+/* 실제 승강장처럼: 문 양옆 가는 대기선 + 바닥의 작은 칸-문 번호. 누르는 영역은 넓게 둡니다 */
 .g-mark {
-  position: absolute; top: 46px; width: 104px; height: 270px;
+  position: absolute; top: 40px; width: 104px; height: 200px;
   border: 0; padding: 0; cursor: pointer; font: inherit; background: none;
-  display: grid; grid-template-columns: 22px 1fr 22px; gap: 4px;
+  display: grid; grid-template-columns: 5px 1fr 5px; gap: 12px; align-items: start;
   color: #3b4148;
 }
 .g-lane {
-  border-radius: 4px;
-  background: repeating-linear-gradient(180deg, transparent 0 16px, rgb(255 255 255 / 0.75) 16px 20px, transparent 20px 30px),
-    rgb(255 255 255 / 0.18);
-  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.55);
+  height: 120px; border-radius: 2px;
+  background: repeating-linear-gradient(180deg, rgb(255 255 255 / 0.8) 0 14px, transparent 14px 24px);
   transition: background-color 0.2s, box-shadow 0.2s;
 }
-.g-mark-txt { display: grid; align-content: start; justify-items: center; padding-top: 18px; transform: scaleY(1.7); transform-origin: top; }
-.g-mark-label { font-size: 22px; font-weight: 900; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: #f7f8f8; text-shadow: 0 1px 0 rgb(0 0 0 / 0.15); }
-.g-mark-p { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; color: #3b4148; }
-.g-mark.best .g-lane { background-color: rgb(25 194 108 / 0.55); box-shadow: inset 0 0 0 2px #19c26c; animation: g-pulse 1.6s ease-in-out infinite; }
+.g-mark-txt { display: grid; justify-items: center; gap: 3px; padding-top: 10px; transform: scaleY(1.9); transform-origin: top; }
+.g-mark-label {
+  font-size: 11px; font-weight: 800; line-height: 14px; font-variant-numeric: tabular-nums;
+  color: #2f353b; background: rgb(255 255 255 / 0.85); padding: 0 5px; border-radius: 2px;
+}
+.g-mark-p { font-size: 10px; font-weight: 700; line-height: 12px; font-variant-numeric: tabular-nums; color: #4a5158; }
+.g-mark.best .g-lane { background-color: rgb(25 194 108 / 0.45); box-shadow: 0 0 0 1px #19c26c; animation: g-pulse 1.6s ease-in-out infinite; }
+.g-mark.best .g-mark-label { background: #19c26c; color: #fff; }
 .g-mark.best .g-mark-p { color: #0c6b3a; }
-.g-mark.mine .g-lane { background-color: rgb(77 141 255 / 0.65); box-shadow: inset 0 0 0 2px #fff, 0 0 18px rgb(77 141 255 / 0.8); animation: none; }
+.g-mark.mine .g-lane { background-color: rgb(77 141 255 / 0.7); box-shadow: 0 0 10px rgb(77 141 255 / 0.8); animation: none; }
+.g-mark.mine .g-mark-label { background: #3d7bff; color: #fff; }
 .g-mark.mine .g-mark-p { color: #123a85; }
 @keyframes g-pulse { 50% { background-color: rgb(25 194 108 / 0.25); } }
 
@@ -479,7 +517,7 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--green); ou
     linear-gradient(#9cc0dc, #dfe9ef);
 }
 .g-stn {
-  position: absolute; inset: 0; z-index: 1; padding-right: 20%;
+  position: absolute; inset: 0; z-index: 1;
   background:
     linear-gradient(transparent 84px, #9aa0a6 84px 88px, #c9ccc7 88px),
     repeating-linear-gradient(90deg, #dcdfda 0 58px, #cdd1cb 58px 60px);
@@ -489,7 +527,15 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--green); ou
 }
 .g-stn.in { transform: translateX(0); }
 .g-stn:not(.in) { transition: transform 1.6s cubic-bezier(0.6, 0, 0.9, 0.4); transform: translateX(-110%); }
-.g-stn b { background: #fff; color: #16191d; border-left: 6px solid var(--lc); padding: 3px 14px; font-size: 16px; font-weight: 900; white-space: nowrap; border-radius: 3px; box-shadow: 0 1px 4px rgb(0 0 0 / 0.2); }
+/* 역 이름판은 가운데 창 한가운데에 둡니다. 창(3칸) 하나 폭을 넘지 않게 글자를 줄입니다 */
+.g-stn b {
+  background: #fff; color: #16191d; border-left: 5px solid var(--lc); border-radius: 3px;
+  padding: 3px 10px; font-weight: 900; white-space: nowrap; letter-spacing: -0.02em;
+  font-size: clamp(12px, 3.6vw, 16px); box-shadow: 0 1px 4px rgb(0 0 0 / 0.2);
+  max-width: calc((100% - 76px) / 3 - 6px); overflow: hidden; text-overflow: ellipsis;
+}
+/* 긴 이름(동대문역사문화공원 등)은 자르지 않고 두 줄로 */
+.g-stn b.long { font-size: clamp(11px, 3vw, 14px); padding: 3px 8px; white-space: normal; word-break: break-all; line-height: 1.2; text-align: center; overflow: visible; }
 
 /* 창틀: 둥근 창 바깥을 벽색 그림자로 덮습니다 */
 .g-panes { position: absolute; inset: 10px 12px; z-index: 2; display: flex; gap: 26px; pointer-events: none; outline: 24px solid var(--wall); }
@@ -576,3 +622,5 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--green); ou
   .g-world, .g-train.arriving, .g-stn, .g-me { transition: none !important; }
   .g-person, .g-stander, .g-mark.best .g-lane { animation: none !important; }
 }
+
+.steps .at { margin-right: 6px; color: var(--ink-3); font-variant-numeric: tabular-nums; font-weight: 500; }

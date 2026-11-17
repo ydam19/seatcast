@@ -8,12 +8,14 @@
 자리 예측은 혼잡도와 칸·문 위치가 공개된 서울교통공사 1~8호선 구간만 합니다.
 9호선은 연결망(경로·환승)에만 들어갑니다.
 
-계산 (구간 p -> n 으로 n에 도착하는 열차 한 대 기준)
-1. 도착 승객 = 혼잡도(p -> n) x 정원/100
-2. n의 하루 하차 인원 = 월 합계 / 요일 구분별 일수 (평일·토·일 비중은 혼잡도 합으로 배분)
-3. 열차 한 대 하차 = 하루 하차 x (이 방향 도착 승객 / n에 도착하는 모든 방향 승객) / 시간당 열차 수
-   시간당 열차 수는 호선별로 '승하차 순증감 = 혼잡도 변화' 회귀로 역산합니다.
+계산 (구간 p -> n 으로 n에 도착하는 열차 한 대 기준, 혼잡도는 30분 단위)
+1. 도착 승객 = 혼잡도(p -> n, 30분 구간) x 정원/100
+2. n의 시간대 하차 인원 = 월 합계 / 요일 구분별 일수 (평일·토·일 비중은 혼잡도 합으로 배분)
+3. 열차 한 대 하차 = 시간대 하차 x 이 방향 도착 승객 / sum(방향별 도착 승객 x 그 시간 실제 열차 수)
+   열차 수는 역별 시간표(data/raw/timetable.csv)에서 p를 떠나 n에 서는 열차를 셉니다.
 4. 문별 분배: 계단·에스컬레이터와 가까운 문에 가중치를 더 줍니다. [가정]
+
+시간표는 web/data/tt/{호선}-{요일}.json으로 따로 내보내, 화면에서 실제 열차를 고르는 데 씁니다.
 """
 import calendar
 import json
@@ -24,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from seatcast.line9 import EXPRESS_STOPS
+from seatcast.timetable import load_runs
 
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw"
@@ -32,12 +35,11 @@ CONGESTION = RAW / "congestion_20260930.xlsx"
 
 DAYTYPES = ("평일", "토요일", "일요일")
 HOURS = list(range(5, 24))
+SLOT_MIN = 30
 CARS = {"1": 10, "2": 10, "3": 10, "4": 10, "5": 8, "6": 8, "7": 8, "8": 6, "9": 6}
 DOORS = 4
 SEATS_PER_CAR = 54
 CAPACITY_PER_CAR = 160
-MIN_TPH = 6.0
-DIAG = {}  # 열차 수 회귀 진단: (호선, 요일, 시) -> (표본 수, 열차 수, 상관계수)
 
 # 문별 가중치 [가정] — 관찰 데이터로 보정할 값.
 # 앉은 사람은 내릴 문이 아니라 빈자리가 있던 곳에 앉으므로 쏠림을 약하게 둡니다(3배로 두면 한 문에서 좌석 수보다 많이 비는 값이 나옴).
@@ -183,12 +185,19 @@ def load_congestion():
         x["line"] = x["호선"].str.replace("호선", "")
         long = x.melt(id_vars=["line", "역번호", "역명", "상하구분"], value_vars=slots,
                       var_name="slot", value_name="cong")
-        long["hour"] = long["slot"].str.slice(0, 2).astype(int) % 24
+        hh = long["slot"].str.slice(0, 2).astype(int)
+        mm = long["slot"].str.slice(3, 5).astype(int)
+        # 자정 넘은 구간(00:00~00:30)은 전날 운행이라 24시로 봅니다
+        long["slot"] = (hh + 24 * (hh < 3)) * 60 + mm
         long["daytype"] = dt
         frames.append(long)
     df = pd.concat(frames)
     df["역번호"] = df["역번호"].astype(int)
-    return df.groupby(["line", "역번호", "역명", "상하구분", "daytype", "hour"])["cong"].mean()
+    return df.groupby(["line", "역번호", "역명", "상하구분", "daytype", "slot"])["cong"].mean()
+
+
+def slot_hour(slot):
+    return (slot // 60) % 24
 
 
 def load_doors():
@@ -246,6 +255,45 @@ def load_ridership():
     return pd.concat(parts).groupby(["month", "line", "name", "hour"])[["on", "off"]].sum()
 
 
+# ---------------------------------------------------------------- 시간표 내보내기
+
+def write_timetables(runs, station_order):
+    """호선·요일별 열차 목록. 정차역은 station_order의 번호, 시각은 자정부터 30초 단위 정수.
+
+    {"dests": [행선지...], "trains": [[행선지, 급행 0/1, 열차번호, 역0, 시각0, 역1, 시각1, ...], ...]}
+    행선지는 번호 하나, 또는 순환선처럼 운행 중에 바뀌면 [[정차 순번, 행선지 번호], ...]입니다.
+    열차번호는 숫자만 남긴 값입니다(시간표 'K402'와 실시간 도착정보 '0402'를 맞추기 위해).
+    첫 역은 출발 시각, 나머지는 도착 시각입니다(타는 역은 출발, 내리는 역은 도착을 쓰기 위해
+    역마다 출발 시각도 필요하면 도착 + 30초로 봅니다).
+    """
+    out_dir = WEB / "tt"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    groups = {}
+    for r in runs:
+        groups.setdefault((r["line"], r["daytype"]), []).append(r)
+    for (line, dt), rs in groups.items():
+        idx = {n: i for i, n in enumerate(station_order[line])}
+        dests, trains = [], []
+        def di(name):
+            if name not in dests:
+                dests.append(name)
+            return dests.index(name)
+
+        for r in sorted(rs, key=lambda r: r["stops"][0][2]):
+            legs = r.get("legs")
+            dest = [[i, di(d)] for i, d in legs] if legs else di(r["dest"])
+            no = re.sub(r"\D", "", r["train"])
+            row = [dest, int(r["express"]), int(no) if no else 0]
+            for k, (name, a, b) in enumerate(r["stops"]):
+                if name not in idx:
+                    break
+                row += [idx[name], (b if k == 0 else a) // 30]
+            if len(row) >= 7:
+                trains.append(row)
+        (out_dir / f"{line}-{DAYTYPES.index(dt)}.json").write_text(
+            json.dumps({"dests": dests, "trains": trains}, separators=(",", ":")), encoding="utf-8")
+
+
 # ---------------------------------------------------------------- 조립
 
 def build():
@@ -291,17 +339,20 @@ def build():
             else:
                 dep[(line, a, b)] = series
 
-    def dep_val(line, a, b, dt, h):
+    slots = sorted(cong.index.get_level_values("slot").unique())
+
+    def dep_val(line, a, b, dt, slot):
         s = dep.get((line, a, b))
         if s is None:
             return np.nan
-        return float(s.get((dt, h), np.nan))
+        return float(s.get((dt, slot), np.nan))
 
     # 하루 승하차(요일 구분별): 혼잡도 합으로 평일·토·일 비중을 나눕니다
     activity = {}
     for (line, a, b), s in dep.items():
-        for (dt, h), v in s.items():
-            activity[(line, a, dt, h)] = activity.get((line, a, dt, h), 0) + v
+        for (dt, slot), v in s.items():
+            k = (line, a, dt, slot_hour(slot))
+            activity[k] = activity.get(k, 0) + v
     daily = {}
     months = ride.index.get_level_values("month").unique()
     for ym in months:
@@ -321,63 +372,21 @@ def build():
                 acc[2] += 1
     daily = {k: (on / c, off / c) for k, (on, off, c) in daily.items()}
 
-    # 환승역(1~9호선 및 다른 노선과 겹치는 역)은 열차 수 회귀에서 뺍니다
-    all_st = pd.read_csv(RAW / "stations_all.csv", dtype=str)
-    counts = all_st["STATION_NM"].map(canon).value_counts()
-    transfer_names = set(counts[counts > 1].index)
+    # 시간표에서 구간별 실제 열차 수: (line, p, n) -> {(daytype, hour): 대수}
+    runs = load_runs(list(CARS))
+    trains = {}
+    for r in runs:
+        for (p, _, t), (n, _, _) in zip(r["stops"], r["stops"][1:]):
+            k = (r["line"], p, n)
+            hk = (r["daytype"], slot_hour(t // 60))
+            trains.setdefault(k, {})
+            trains[k][hk] = trains[k].get(hk, 0) + 1
 
-    tph = {}
-    for line, triples in edges.items():
-        ppp = CARS[line] * CAPACITY_PER_CAR / 100
-        tph[line] = {}
-        for dt in DAYTYPES:
-            est = {}
-            for h in HOURS:
-                xs, ys = [], []
-                net = {}
-                # 갈림길(강동 등)에서는 열차가 갈래 중 하나로 가므로 이어지는 출발 혼잡도의 평균을 씁니다
-                conts = {}
-                for p, n, c in triples:
-                    conts.setdefault((p, n), set()).add(c)
-                for (p, n), cs in conts.items():
-                    arr = dep_val(line, p, n, dt, h)
-                    outs = [v for v in (dep_val(line, n, c, dt, h) for c in cs if c is not None) if v == v]
-                    if any(c is not None for c in cs) and not outs:
-                        continue  # 이어지는 구간이 데이터 없는 구간이면 건너뜁니다
-                    out = float(np.mean(outs)) if outs else 0.0
-                    if np.isnan(arr) or np.isnan(out):
-                        continue
-                    net[n] = net.get(n, 0.0) + (out - arr) * ppp
-                for n, dl in net.items():
-                    if n in transfer_names or (line, n, dt, h) not in daily:
-                        continue
-                    on, off = daily[(line, n, dt, h)]
-                    xs.append(on - off)
-                    ys.append(dl)
-                x, y = np.array(xs), np.array(ys)
-                if len(x) >= 5 and (x * x).sum() > 0:
-                    k = (x * y).sum() / (x * x).sum()
-                    r = np.corrcoef(x, y)[0, 1]
-                    DIAG[(line, dt, h)] = (len(x), round(1 / k, 1) if k else None, round(r, 2))
-                    if k > 0 and r >= 0.6:
-                        est[h] = 1 / k
-            s = pd.Series(est, dtype=float).reindex(HOURS).interpolate(limit_direction="both")
-            tph[line][dt] = s.clip(lower=MIN_TPH).round(2).tolist()
-    # 1호선(10개 역이 대부분 환승역)처럼 회귀가 안 되는 호선은 다른 호선의 시간대별 중앙값을 씁니다 [가정]
-    ok = [l for l in tph if all(v == v for v in tph[l]["평일"])]
-    fallback = [round(float(np.median([tph[l]["평일"][i] for l in ok])), 2) for i in range(len(HOURS))]
-    for line in tph:
-        if line not in ok:
-            tph[line]["평일"] = fallback
-        # 주말은 회귀가 불안정해 평일 10~16시 중앙값을 씁니다 [가정]
-        wk = tph[line]["평일"]
-        midday = float(np.median(wk[HOURS.index(10): HOURS.index(16) + 1]))
-        for dt in ("토요일", "일요일"):
-            tph[line][dt] = [round(midday, 2)] * len(HOURS)
-
-    # 구간별 열차 한 대당 도착 승객과 하차 인원
+    # 구간별 열차 한 대당 도착 승객과 하차 인원 (30분 구간마다)
     alight, load = {}, {}
     for line, triples in edges.items():
+        if line == "9":
+            continue
         ppp = CARS[line] * CAPACITY_PER_CAR / 100
         incoming = {}
         for p, n, _ in triples:
@@ -387,17 +396,21 @@ def build():
             A, L = {}, {}
             for dt in DAYTYPES:
                 a_list, l_list = [], []
-                for hi, h in enumerate(HOURS):
-                    arr = dep_val(line, p, n, dt, h) * ppp
-                    total = sum(v for v in (dep_val(line, q, n, dt, h) * ppp for q in incoming[n])
-                                if v == v)
-                    t = tph[line][dt][hi]
+                for slot in slots:
+                    h = slot_hour(slot)
+                    arr = dep_val(line, p, n, dt, slot) * ppp
+                    flow = 0.0  # n에 도착하는 모든 방향의 시간당 승객
+                    for q in incoming[n]:
+                        v = dep_val(line, q, n, dt, slot) * ppp
+                        t = trains.get((line, q, n), {}).get((dt, h), 0)
+                        if v == v:
+                            flow += v * t
                     off = daily.get((line, n, dt, h), (0, 0))[1]
-                    if arr != arr or total <= 0 or not t or t != t:
+                    if arr != arr or flow <= 0 or not trains.get((line, p, n), {}).get((dt, h)):
                         a_list.append(None)
                         l_list.append(None)
                         continue
-                    a_list.append(round(min(off * arr / total / t, arr), 1))
+                    a_list.append(round(min(off * arr / flow, arr), 1))
                     l_list.append(round(arr, 1))
                 A[dt], L[dt] = a_list, l_list
             alight[key], load[key] = A, L
@@ -457,7 +470,7 @@ def build():
 
     model = {
         "meta": {
-            "hours": HOURS, "daytypes": list(DAYTYPES),
+            "slots": [int(x) for x in slots], "slot_min": SLOT_MIN, "daytypes": list(DAYTYPES),
             "lines": {l: {"cars": CARS[l], "doors": DOORS, "seats": CARS[l] * SEATS_PER_CAR,
                           "capacity": CARS[l] * CAPACITY_PER_CAR, "forecast": l != "9"}
                       for l in station_order},
@@ -467,12 +480,12 @@ def build():
         },
         "stations": station_order,
         "edges": route_edges,
-        "trains_per_hour": tph,
         "arrive_load": load,
         "alight": alight,
         "door_weights": door_w,
     }
     WEB.mkdir(parents=True, exist_ok=True)
+    write_timetables(runs, station_order)
     (WEB / "model.json").write_text(json.dumps(model, ensure_ascii=False, separators=(",", ":")),
                                     encoding="utf-8")
     return model, missing
@@ -484,5 +497,5 @@ if __name__ == "__main__":
     print(f"model.json {size:.2f} MB | stations", {l: len(v) for l, v in m["stations"].items()})
     print("route edges", len(m["edges"]), "| forecast edges", len(m["alight"]))
     print("edges without congestion:", missing[:20], len(missing))
-    for l in "12345678":
-        print(l, "평일 tph 8시/14시/18시:", [m["trains_per_hour"][l]["평일"][HOURS.index(h)] for h in (8, 14, 18)])
+    tt = sorted((WEB / "tt").glob("*.json"))
+    print("timetables", len(tt), f"{sum(p.stat().st_size for p in tt) / 1e6:.2f} MB")

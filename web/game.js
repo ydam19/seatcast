@@ -1,5 +1,7 @@
 // 앉을각 게임 화면: 승강장(1인칭) -> 열차 안(창밖 풍경) 시뮬레이션
-import { LINE_COLORS, doorLabel, congestionPct } from "./seatcast.js";
+import {
+  LINE_COLORS, doorLabel, congestionPct, clock, metricMode, doorHeat, doorText, fmtWait,
+} from "./seatcast.js";
 
 const DOOR_GAP = 120; // 문 사이 간격(px)
 const CAR_GAP = 28; // 칸 사이 연결부
@@ -84,7 +86,7 @@ export function createGame(root, { model, onPick }) {
   });
 
   function show(plan, state) {
-    const key = JSON.stringify([state.fromLine, state.from, state.toLine, state.to, state.daytype, state.hour]);
+    const key = JSON.stringify([plan.sig, state.daytype, state.depart]);
     if (ctx && ctx.key === key) {
       // 같은 경로: 위치만 바꿉니다
       const m = state.mine[ctx.segIdx];
@@ -127,7 +129,7 @@ export function createGame(root, { model, onPick }) {
         <span class="lb">${seg.line}</span><p>${why}</p></div>`;
       return;
     }
-    ctx.best = f.total.indexOf(Math.max(...f.total));
+    ctx.best = f.best;
     const mine = ctx.state.mine[i];
     ctx.pos = mine ? labelIndex(mine) : ctx.best;
     platform();
@@ -153,8 +155,8 @@ export function createGame(root, { model, onPick }) {
       const label = doorLabel(i, f.doors);
       psd += `<div class="g-bay" style="left:${x - 36}px"><b class="g-plate">${label}</b><i class="l"></i><i class="r"></i></div>`;
       marks += `<button type="button" class="g-mark${i === ctx.best ? " best" : ""}" data-i="${i}" style="left:${x - 52}px"
-        aria-label="${label}에 서기, 앉을 확률 ${P(f.total[i])}%"><i class="g-lane"></i>
-        <span class="g-mark-txt"><span class="g-mark-label">${label}</span><span class="g-mark-p">${P(f.total[i])}%</span></span>
+        aria-label="${label}에 서기, 앉을 확률 ${P(f.total[i])}%, 평균 ${fmtWait(f.wait[i])}정거장 서서"><i class="g-lane"></i>
+        <span class="g-mark-txt"><span class="g-mark-label">${label}</span><span class="g-mark-p">${doorText(f, i)}</span></span>
         <i class="g-lane"></i></button>`;
       const q = crowdCount(pct, r);
       for (let k = 0; k < q; k++) {
@@ -178,7 +180,7 @@ export function createGame(root, { model, onPick }) {
       let cells = "";
       for (let d = 0; d < f.doors; d++) {
         const i = c * f.doors + d;
-        const h = Math.min(4, Math.floor(f.total[i] * 5));
+        const h = Math.min(4, Math.floor(doorHeat(f, i) * 5));
         cells += `<i data-i="${i}" data-h="${h}"></i>`;
       }
       mini += `<span class="g-mini-car">${cells}</span>`;
@@ -190,7 +192,7 @@ export function createGame(root, { model, onPick }) {
         <span class="lb">${seg.line}</span>
         <span class="g-sign-st">${seg.nodes[0]}</span>
         <span class="g-sign-dir">${seg.nodes[1]} 방면</span>
-        <span class="g-led" id="gLed">열차가 들어오고 있습니다</span>
+        <span class="g-led" id="gLed">${seg.trip ? `${clock(seg.trip.board)} ${seg.trip.dest}행` : "열차가 들어오고 있습니다"}</span>
       </div>
       <div class="g-view" id="gView">
         <div class="g-world" id="gWorld" style="width:${W}px">
@@ -281,10 +283,13 @@ export function createGame(root, { model, onPick }) {
     el.mini.querySelectorAll("[data-i]").forEach((c) => c.classList.toggle("mine", Number(c.dataset.i) === i));
     const label = doorLabel(i, f.doors);
     const bestLabel = doorLabel(ctx.best, f.doors);
+    const what = metricMode(f) === "pct"
+      ? `앉을 확률 <b class="g-num">${P(f.total[i])}%</b>`
+      : `평균 <b class="g-num">${fmtWait(f.wait[i])}</b>정거장 서서`;
     el.pos.innerHTML = i === ctx.best
-      ? `<b>${label}</b> 앉을 확률 <b class="g-num">${P(f.total[i])}%</b><span class="g-tag">최고 자리</span>`
-      : `<b>${label}</b> 앉을 확률 <b class="g-num">${P(f.total[i])}%</b>
-         <button type="button" class="g-jump" id="gJump">추천 ${bestLabel} · ${P(f.total[ctx.best])}% ›</button>`;
+      ? `<b>${label}</b> ${what}<span class="g-tag">최고 자리</span>`
+      : `<b>${label}</b> ${what}
+         <button type="button" class="g-jump" id="gJump">추천 ${bestLabel} · ${doorText(f, ctx.best)} ›</button>`;
     el.pos.querySelector("#gJump")?.addEventListener("click", () => pick(ctx.best));
   }
 
@@ -334,7 +339,7 @@ export function createGame(root, { model, onPick }) {
     <div class="g-stage g-ride" style="--lc:${lc}">
       <div class="g-sign g-sign-ride">
         <span class="lb">${seg.line}</span>
-        <span class="g-led" id="gLed">${seg.nodes[0]} 출발</span>
+        <span class="g-led" id="gLed">${seg.trip ? `${clock(seg.trip.board)} ` : ""}${seg.nodes[0]} 출발</span>
         <span class="g-chance" id="gChance">0%</span>
       </div>
       <ol class="g-dots" id="gDots">${dots}</ol>
@@ -461,7 +466,9 @@ export function createGame(root, { model, onPick }) {
         target = MAXV;
         await sleep(2600, token);
         // 도착: 역 플랫폼이 창밖으로 들어옵니다
-        el.stn.querySelector("b").textContent = name;
+        const plate = el.stn.querySelector("b");
+        plate.textContent = name;
+        plate.classList.toggle("long", name.length >= 6);
         el.stn.classList.add("in");
         target = 0;
         await sleep(1300, token);
@@ -512,7 +519,9 @@ export function createGame(root, { model, onPick }) {
         ? (idx > 0 ? `${idx}정거장 서서 가고, 남은 ${seg.nodes.length - 1 - idx}정거장은 앉아서 갔어요.` : "")
         : pos === ctx.best
           ? `이 자리가 가장 좋은 자리였지만 확률은 ${P(f.total[pos])}%였어요.`
-          : `추천 자리 ${bestLabel}였다면 확률이 ${P(f.total[pos])}%에서 ${P(f.total[ctx.best])}%로 올라가요.`;
+          : metricMode(f) === "pct"
+            ? `추천 자리 ${bestLabel}였다면 확률이 ${P(f.total[pos])}%에서 ${P(f.total[ctx.best])}%로 올라가요.`
+            : `추천 자리 ${bestLabel}였다면 서서 가는 정거장이 평균 ${fmtWait(f.wait[pos])}에서 ${fmtWait(f.wait[ctx.best])}로 줄어요.`;
       const next = ctx.segIdx + 1 < ctx.plan.segments.length
         ? `<button type="button" class="g-btn primary" id="gNextSeg">${seg.nodes.at(-1)}에서 환승하기</button>` : "";
       const retryBest = !seated && pos !== ctx.best
